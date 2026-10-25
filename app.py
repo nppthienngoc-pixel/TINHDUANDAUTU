@@ -81,180 +81,198 @@ def fmt(x, d=2):
     return f"{x:,.{d}f}"
 
 
+def years_months(val):
+    return f"≈ {int(val)} năm {round((val - int(val)) * 12)} tháng"
+
+
 # ======================================================================
 # GIAO DIỆN
 # ======================================================================
 st.title("📈 Thẩm định hiệu quả dự án đầu tư")
-st.caption("Chọn chỉ tiêu cần tính, sau đó nhập dữ liệu dự án.")
+st.caption("Bước 1: Nhập chỉ tiêu dự án → Bước 2: Chọn các chỉ tiêu cần tính → Xem kết quả.")
 
-METRICS = {
-    "NPV – Giá trị hiện tại ròng": "NPV",
-    "IRR – Tỷ suất hoàn vốn nội bộ": "IRR",
-    "MIRR – IRR hiệu chỉnh": "MIRR",
-    "BCR – Tỷ số lợi ích / chi phí": "BCR",
-    "PP – Thời gian hoàn vốn": "PP",
-    "DPP – Thời gian hoàn vốn có chiết khấu": "DPP",
+# ----------------------------------------------------------------------
+# BƯỚC 1: NHẬP DỮ LIỆU DỰ ÁN
+# ----------------------------------------------------------------------
+st.header("Bước 1. Nhập dữ liệu dự án")
+
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    n = int(st.number_input("Số năm hoạt động (n)", min_value=1, max_value=50, value=5, step=1))
+with c2:
+    r = st.number_input("Suất chiết khấu r (%/năm)", value=10.0, step=0.5, format="%.2f") / 100
+with c3:
+    fin = st.number_input("Lãi suất tài trợ (%/năm) – cho MIRR", value=8.0, step=0.5, format="%.2f") / 100
+with c4:
+    reinv = st.number_input("Lãi suất tái đầu tư (%/năm) – cho MIRR", value=10.0, step=0.5, format="%.2f") / 100
+
+st.write(
+    "Nhập dòng tiền từng năm (năm 0 là vốn đầu tư ban đầu).  \n"
+    "• **Dòng tiền ròng CF**: dùng cho NPV, IRR, MIRR, PP, DPP (vốn đầu tư nhập **số âm**).  \n"
+    "• **Lợi ích B** và **Chi phí C**: chỉ cần nhập nếu muốn tính **BCR**."
+)
+
+df0 = pd.DataFrame({
+    "Năm": list(range(n + 1)),
+    "Dòng tiền ròng CF": 0.0,
+    "Lợi ích B": 0.0,
+    "Chi phí C": 0.0,
+})
+df_in = st.data_editor(df0, hide_index=True, disabled=["Năm"], use_container_width=True, key=f"table_{n}")
+
+cfs = df_in["Dòng tiền ròng CF"].fillna(0).to_numpy(dtype=float)
+B = df_in["Lợi ích B"].fillna(0).to_numpy(dtype=float)
+C = df_in["Chi phí C"].fillna(0).to_numpy(dtype=float)
+t = np.arange(n + 1)
+
+# ----------------------------------------------------------------------
+# BƯỚC 2: CHỌN CHỈ TIÊU TÍNH TOÁN
+# ----------------------------------------------------------------------
+st.header("Bước 2. Chọn chỉ tiêu cần tính")
+
+OPTIONS = {
+    "NPV": "NPV – Giá trị hiện tại ròng",
+    "IRR": "IRR – Tỷ suất hoàn vốn nội bộ",
+    "MIRR": "MIRR – IRR hiệu chỉnh",
+    "BCR": "BCR – Tỷ số lợi ích / chi phí",
+    "PP": "PP – Thời gian hoàn vốn",
+    "DPP": "DPP – Thời gian hoàn vốn có chiết khấu",
 }
 
-choice = st.selectbox("❓ Bạn muốn tính chỉ tiêu nào?", list(METRICS.keys()), index=None,
-                      placeholder="Chọn một chỉ tiêu...")
+selected = st.multiselect(
+    "Chọn một hoặc nhiều chỉ tiêu:",
+    options=list(OPTIONS.keys()),
+    format_func=lambda k: OPTIONS[k],
+    placeholder="Chọn chỉ tiêu...",
+)
 
-if choice is None:
-    st.info("👆 Vui lòng chọn chỉ tiêu cần tính để bắt đầu.")
+if not selected:
+    st.info("👆 Hãy chọn ít nhất một chỉ tiêu để xem kết quả.")
     st.stop()
 
-m = METRICS[choice]
+if not np.any(cfs != 0) and not (np.any(B != 0) or np.any(C != 0)):
+    st.warning("Bạn chưa nhập dữ liệu dòng tiền. Hãy điền vào bảng ở Bước 1.")
+    st.stop()
 
-# ---------------- Công thức ----------------
-with st.expander("📐 Công thức", expanded=True):
+# ----------------------------------------------------------------------
+# KẾT QUẢ
+# ----------------------------------------------------------------------
+st.header("Kết quả")
+
+summary = []   # (chỉ tiêu, giá trị, kết luận)
+details = {}   # hàm hiển thị chi tiết cho từng chỉ tiêu
+
+has_signs = bool(np.any(cfs < 0) and np.any(cfs > 0))
+
+for m in [k for k in OPTIONS if k in selected]:
+
     if m == "NPV":
-        st.latex(r"NPV=\sum_{t=0}^{n}\frac{CF_t}{(1+r)^t}")
-        st.write("Quy tắc: **NPV > 0** → dự án chấp nhận được.")
-    elif m == "IRR":
-        st.latex(r"\sum_{t=0}^{n}\frac{CF_t}{(1+IRR)^t}=0")
-        st.write("Quy tắc: **IRR > r (suất chiết khấu / chi phí vốn)** → dự án chấp nhận được.")
-    elif m == "MIRR":
-        st.latex(r"MIRR=\left(\frac{\sum_{t=0}^{n} CF^{+}_t(1+r_{tđ})^{n-t}}"
-                 r"{\left|\sum_{t=0}^{n}\frac{CF^{-}_t}{(1+r_{tt})^{t}}\right|}\right)^{1/n}-1")
-        st.write("Trong đó $r_{tđ}$: lãi suất tái đầu tư; $r_{tt}$: lãi suất tài trợ (chi phí vốn vay). "
-                 "Quy tắc: **MIRR > r** → dự án chấp nhận được.")
-    elif m == "BCR":
-        st.latex(r"BCR=\frac{PV(B)}{PV(C)}=\frac{\sum_{t=0}^{n}\frac{B_t}{(1+r)^t}}{\sum_{t=0}^{n}\frac{C_t}{(1+r)^t}}")
-        st.write("Quy tắc: **BCR > 1** → dự án chấp nhận được.")
-    elif m == "PP":
-        st.latex(r"PP=(k-1)+\frac{\left|\sum_{t=0}^{k-1}CF_t\right|}{CF_k}")
-        st.write("Với $k$ là năm đầu tiên mà dòng tiền tích lũy ≥ 0. Thời gian hoàn vốn càng ngắn càng tốt.")
-    elif m == "DPP":
-        st.latex(r"DPP=(k-1)+\frac{\left|\sum_{t=0}^{k-1}\frac{CF_t}{(1+r)^t}\right|}{\frac{CF_k}{(1+r)^k}}")
-        st.write("Với $k$ là năm đầu tiên mà dòng tiền chiết khấu tích lũy ≥ 0.")
+        pv = cfs / (1 + r) ** t
+        val = float(pv.sum())
+        summary.append(("NPV", fmt(val), "✅ Chấp nhận (NPV > 0)" if val > 0 else "❌ Không chấp nhận (NPV ≤ 0)"))
 
-st.divider()
-st.subheader("📝 Nhập dữ liệu dự án")
-
-col1, col2 = st.columns(2)
-with col1:
-    n = st.number_input("Số năm hoạt động của dự án (n)", min_value=1, max_value=50, value=5, step=1)
-
-# Tham số lãi suất
-r = fin = reinv = None
-if m in ("NPV", "BCR", "DPP"):
-    with col2:
-        r = st.number_input("Suất chiết khấu r (%/năm)", value=10.0, step=0.5, format="%.2f") / 100
-elif m == "IRR":
-    with col2:
-        r = st.number_input("Suất chiết khấu / chi phí vốn r (%/năm) – để so sánh với IRR",
-                            value=10.0, step=0.5, format="%.2f") / 100
-elif m == "MIRR":
-    with col2:
-        fin = st.number_input("Lãi suất tài trợ (%/năm)", value=8.0, step=0.5, format="%.2f") / 100
-        reinv = st.number_input("Lãi suất tái đầu tư (%/năm)", value=10.0, step=0.5, format="%.2f") / 100
-        r = st.number_input("Chi phí vốn r để so sánh (%/năm)", value=10.0, step=0.5, format="%.2f") / 100
-
-years = list(range(0, int(n) + 1))
-
-if m == "BCR":
-    st.write("Nhập **Lợi ích (B)** và **Chi phí (C)** của từng năm (năm 0 thường là vốn đầu tư ban đầu):")
-    df0 = pd.DataFrame({"Năm": years, "Lợi ích B": 0.0, "Chi phí C": 0.0})
-    df_in = st.data_editor(df0, hide_index=True, disabled=["Năm"], use_container_width=True,
-                           key=f"bcr_{n}")
-else:
-    st.write("Nhập **dòng tiền ròng CF** từng năm (năm 0 là vốn đầu tư, nhập **số âm**):")
-    default = [0.0] * (int(n) + 1)
-    df0 = pd.DataFrame({"Năm": years, "Dòng tiền ròng CF": default})
-    df_in = st.data_editor(df0, hide_index=True, disabled=["Năm"], use_container_width=True,
-                           key=f"cf_{m}_{n}")
-
-calc = st.button("🧮 Tính toán", type="primary")
-
-# ======================================================================
-# TÍNH TOÁN & HIỂN THỊ KẾT QUẢ
-# ======================================================================
-if calc:
-    st.divider()
-    st.subheader("✅ Kết quả")
-
-    if m == "BCR":
-        B = df_in["Lợi ích B"].fillna(0).to_numpy(dtype=float)
-        C = df_in["Chi phí C"].fillna(0).to_numpy(dtype=float)
-        ratio, pv_b, pv_c = bcr(r, B, C)
-        a, b, c = st.columns(3)
-        a.metric("PV lợi ích", fmt(pv_b))
-        b.metric("PV chi phí", fmt(pv_c))
-        if ratio is None:
-            st.error("Tổng chi phí hiện tại bằng 0, không thể tính BCR.")
-        else:
-            c.metric("BCR", fmt(ratio, 4))
-            (st.success if ratio > 1 else st.warning)(
-                "BCR > 1 → Nên chấp nhận dự án." if ratio > 1 else "BCR ≤ 1 → Không nên chấp nhận dự án.")
-        t = np.arange(len(B))
-        st.dataframe(pd.DataFrame({"Năm": t, "B": B, "C": C,
-                                   "PV(B)": B / (1 + r) ** t, "PV(C)": C / (1 + r) ** t}),
-                     hide_index=True, use_container_width=True)
-
-    else:
-        cfs = df_in["Dòng tiền ròng CF"].fillna(0).to_numpy(dtype=float)
-        t = np.arange(len(cfs))
-
-        if not (np.any(cfs < 0) and np.any(cfs > 0)) and m != "NPV":
-            st.warning("Dòng tiền cần có cả giá trị âm (đầu tư) và dương (thu nhập) để tính chỉ tiêu này.")
-
-        if m == "NPV":
-            pv = cfs / (1 + r) ** t
-            val = float(pv.sum())
-            st.metric("NPV", fmt(val))
-            (st.success if val > 0 else st.warning)(
-                "NPV > 0 → Nên chấp nhận dự án." if val > 0 else "NPV ≤ 0 → Không nên chấp nhận dự án.")
+        def show_npv(pv=pv):
+            st.latex(r"NPV=\sum_{t=0}^{n}\frac{CF_t}{(1+r)^t}")
             st.dataframe(pd.DataFrame({"Năm": t, "CF": cfs, "Hệ số chiết khấu": 1 / (1 + r) ** t,
                                        "PV(CF)": pv, "PV tích lũy": np.cumsum(pv)}),
                          hide_index=True, use_container_width=True)
+        details["NPV"] = show_npv
 
-        elif m == "IRR":
-            roots = irr(cfs)
-            if not roots:
-                st.error("Không tìm được IRR (dòng tiền phải đổi dấu ít nhất một lần).")
-            else:
-                val = roots[0]
-                st.metric("IRR", f"{val * 100:.4f} %")
+    elif m == "IRR":
+        roots = irr(cfs)
+        if not roots:
+            summary.append(("IRR", "Không xác định", "⚠️ Dòng tiền phải có cả số âm và số dương"))
+            details["IRR"] = lambda: st.error("Không tìm được IRR (dòng tiền phải đổi dấu ít nhất một lần).")
+        else:
+            val = roots[0]
+            summary.append(("IRR", f"{val * 100:.4f} %",
+                            f"✅ Chấp nhận (IRR > r = {r * 100:.2f}%)" if val > r
+                            else f"❌ Không chấp nhận (IRR ≤ r = {r * 100:.2f}%)"))
+
+            def show_irr(roots=roots):
+                st.latex(r"\sum_{t=0}^{n}\frac{CF_t}{(1+IRR)^t}=0")
                 if len(roots) > 1:
                     st.warning("Dòng tiền đổi dấu nhiều lần nên có nhiều nghiệm IRR: "
                                + ", ".join(f"{x * 100:.2f}%" for x in roots)
                                + ". Nên dùng NPV hoặc MIRR để ra quyết định.")
-                (st.success if val > r else st.warning)(
-                    f"IRR ({val * 100:.2f}%) > r ({r * 100:.2f}%) → Nên chấp nhận dự án." if val > r
-                    else f"IRR ({val * 100:.2f}%) ≤ r ({r * 100:.2f}%) → Không nên chấp nhận dự án.")
+                else:
+                    st.write(f"IRR là suất chiết khấu làm NPV = 0: **{roots[0] * 100:.4f}%**")
+            details["IRR"] = show_irr
 
-        elif m == "MIRR":
-            val, fv_pos, pv_neg = mirr(cfs, fin, reinv)
+    elif m == "MIRR":
+        val, fv_pos, pv_neg = mirr(cfs, fin, reinv)
+        if val is None:
+            summary.append(("MIRR", "Không xác định", "⚠️ Dòng tiền phải có cả số âm và số dương"))
+        else:
+            summary.append(("MIRR", f"{val * 100:.4f} %",
+                            f"✅ Chấp nhận (MIRR > r = {r * 100:.2f}%)" if val > r
+                            else f"❌ Không chấp nhận (MIRR ≤ r = {r * 100:.2f}%)"))
+
+        def show_mirr(val=val, fv_pos=fv_pos, pv_neg=pv_neg):
+            st.latex(r"MIRR=\left(\frac{FV(CF^{+})}{|PV(CF^{-})|}\right)^{1/n}-1")
             a, b = st.columns(2)
-            a.metric("FV dòng tiền dương (tại lãi suất tái đầu tư)", fmt(fv_pos))
-            b.metric("PV dòng tiền âm (tại lãi suất tài trợ)", fmt(pv_neg))
+            a.metric("FV dòng tiền dương (lãi suất tái đầu tư)", fmt(fv_pos))
+            b.metric("PV dòng tiền âm (lãi suất tài trợ)", fmt(pv_neg))
             if val is None:
                 st.error("Không tính được MIRR (cần có dòng tiền dương và dòng tiền âm).")
-            else:
-                st.metric("MIRR", f"{val * 100:.4f} %")
-                (st.success if val > r else st.warning)(
-                    f"MIRR ({val * 100:.2f}%) > r ({r * 100:.2f}%) → Nên chấp nhận dự án." if val > r
-                    else f"MIRR ({val * 100:.2f}%) ≤ r ({r * 100:.2f}%) → Không nên chấp nhận dự án.")
+        details["MIRR"] = show_mirr
 
-        elif m == "PP":
-            val, cum = payback(cfs)
-            if val is None:
-                st.error("Dự án chưa hoàn vốn trong thời gian phân tích.")
-            else:
-                st.metric("Thời gian hoàn vốn (PP)", f"{val:.2f} năm")
-                st.caption(f"≈ {int(val)} năm {round((val - int(val)) * 12)} tháng")
+    elif m == "BCR":
+        ratio, pv_b, pv_c = bcr(r, B, C)
+        if ratio is None:
+            summary.append(("BCR", "Không xác định", "⚠️ Chưa nhập Lợi ích B / Chi phí C"))
+        else:
+            summary.append(("BCR", fmt(ratio, 4),
+                            "✅ Chấp nhận (BCR > 1)" if ratio > 1 else "❌ Không chấp nhận (BCR ≤ 1)"))
+
+        def show_bcr(ratio=ratio, pv_b=pv_b, pv_c=pv_c):
+            st.latex(r"BCR=\frac{PV(B)}{PV(C)}")
+            a, b = st.columns(2)
+            a.metric("PV lợi ích", fmt(pv_b))
+            b.metric("PV chi phí", fmt(pv_c))
+            if ratio is None:
+                st.error("Tổng chi phí hiện tại bằng 0, không thể tính BCR. Hãy nhập cột Lợi ích B và Chi phí C.")
+            st.dataframe(pd.DataFrame({"Năm": t, "B": B, "C": C,
+                                       "PV(B)": B / (1 + r) ** t, "PV(C)": C / (1 + r) ** t}),
+                         hide_index=True, use_container_width=True)
+        details["BCR"] = show_bcr
+
+    elif m == "PP":
+        val, cum = payback(cfs)
+        if val is None:
+            summary.append(("PP", "Chưa hoàn vốn", "❌ Không hoàn vốn trong thời gian phân tích"))
+        else:
+            summary.append(("PP", f"{val:.2f} năm", years_months(val)))
+
+        def show_pp(val=val, cum=cum):
+            st.latex(r"PP=(k-1)+\frac{\left|\sum_{t=0}^{k-1}CF_t\right|}{CF_k}")
             st.dataframe(pd.DataFrame({"Năm": t, "CF": cfs, "CF tích lũy": cum}),
                          hide_index=True, use_container_width=True)
             st.line_chart(pd.DataFrame({"CF tích lũy": cum}, index=t))
+        details["PP"] = show_pp
 
-        elif m == "DPP":
-            pv = cfs / (1 + r) ** t
-            val, cum = payback(pv)
-            if val is None:
-                st.error("Dự án chưa hoàn vốn (có chiết khấu) trong thời gian phân tích.")
-            else:
-                st.metric("Thời gian hoàn vốn có chiết khấu (DPP)", f"{val:.2f} năm")
-                st.caption(f"≈ {int(val)} năm {round((val - int(val)) * 12)} tháng")
+    elif m == "DPP":
+        pv = cfs / (1 + r) ** t
+        val, cum = payback(pv)
+        if val is None:
+            summary.append(("DPP", "Chưa hoàn vốn", "❌ Không hoàn vốn (có chiết khấu) trong thời gian phân tích"))
+        else:
+            summary.append(("DPP", f"{val:.2f} năm", years_months(val)))
+
+        def show_dpp(val=val, cum=cum, pv=pv):
+            st.latex(r"DPP=(k-1)+\frac{\left|\sum_{t=0}^{k-1}\frac{CF_t}{(1+r)^t}\right|}{\frac{CF_k}{(1+r)^k}}")
             st.dataframe(pd.DataFrame({"Năm": t, "CF": cfs, "PV(CF)": pv, "PV tích lũy": cum}),
                          hide_index=True, use_container_width=True)
             st.line_chart(pd.DataFrame({"PV tích lũy": cum}, index=t))
+        details["DPP"] = show_dpp
+
+# Bảng tổng hợp
+st.subheader("Tổng hợp")
+st.dataframe(pd.DataFrame(summary, columns=["Chỉ tiêu", "Giá trị", "Nhận xét"]),
+             hide_index=True, use_container_width=True)
+
+# Chi tiết từng chỉ tiêu
+st.subheader("Chi tiết")
+for key, show in details.items():
+    with st.expander(OPTIONS[key], expanded=False):
+        show()
